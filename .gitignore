@@ -1,0 +1,6 @@
+fotocompare.spec
+build/
+dist/
+__pycache__/
+*.pyc
+.test_*/
