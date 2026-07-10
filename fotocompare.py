@@ -116,6 +116,8 @@ class FotocompareApp:
         self.root.minsize(700, 500)
         self.config = load_config()
         self.duplicates = []
+        self.moved_files = []
+        self.dest_dir = None
         self.src_hashes = {}
         self.setup_ui()
 
@@ -282,6 +284,7 @@ class FotocompareApp:
         ))
 
         self.duplicates = dups
+        self.moved_files = []
         self.rename_dups_btn.config(state=tk.NORMAL)
         self.rename_target_btn.config(state=tk.NORMAL)
         self.set_status(f"Trovati {len(dups)} duplicati")
@@ -326,6 +329,7 @@ class FotocompareApp:
             return
 
         moved = 0
+        self.moved_files = []
         for src_match, dup_file, _, _ in self.duplicates:
             try:
                 target = dp / dup_file.name
@@ -336,6 +340,7 @@ class FotocompareApp:
                         target = dp / f"{stem}_{c}{ext}"
                         c += 1
                 shutil.move(str(dup_file), str(target))
+                self.moved_files.append(target)
                 moved += 1
             except Exception as e:
                 messagebox.showerror("Errore", f"Spostamento fallito: {dup_file.name}\n{e}")
@@ -343,10 +348,9 @@ class FotocompareApp:
         win.destroy()
         self.set_status(f"Spostati {moved}/{len(self.duplicates)} duplicati in {dest}")
         if moved:
-            # Refresh tree: remove moved entries
             for item in self.tree.get_children():
                 self.tree.delete(item)
-            self.duplicates = []
+            self.dest_dir = dp
             messagebox.showinfo("Completato", f"Spostati {moved} file duplicati in:\n{dest}")
 
     def rename_source_files(self):
@@ -407,34 +411,40 @@ class FotocompareApp:
         messagebox.showinfo("Completato", f"Rinominati: {renamed}\nSaltati (no EXIF): {skipped}")
 
     def rename_duplicate_files(self):
-        if not self.duplicates:
-            messagebox.showinfo("Rinomina", "Nessun duplicato da rinominare. Fai Scan prima.")
+        files = []
+        if hasattr(self, 'moved_files') and self.moved_files:
+            files = [f for f in self.moved_files if f.exists()]
+        elif self.duplicates:
+            files = [dup_file for _, dup_file, _, _ in self.duplicates if Path(dup_file).exists()]
+        if not files:
+            messagebox.showinfo("Rinomina", "Nessun file da rinominare. Fai Scan e/o sposta prima.")
             return
         changes = []
-        for src_match, dup_file, sz, h in self.duplicates:
-            dt = get_exif_date(dup_file)
+        for f in files:
+            f = Path(f)
+            dt = get_exif_date(f)
             if not dt:
                 continue
             parsed = parse_date_str(dt)
             if not parsed:
                 continue
-            new_name = parsed.strftime("%Y-%m-%d_%H%M%S") + dup_file.suffix.lower()
-            new_path = dup_file.parent / new_name
+            new_name = parsed.strftime("%Y-%m-%d_%H%M%S") + f.suffix.lower()
+            new_path = f.parent / new_name
             if new_path.exists():
                 c = 1
                 while new_path.exists():
-                    new_path = dup_file.parent / f"{parsed.strftime('%Y-%m-%d_%H%M%S')}_{c}{dup_file.suffix.lower()}"
+                    new_path = f.parent / f"{parsed.strftime('%Y-%m-%d_%H%M%S')}_{c}{f.suffix.lower()}"
                     c += 1
-            changes.append((dup_file, new_path))
+            changes.append((f, new_path))
         if not changes:
-            messagebox.showinfo("Rinomina", "Nessun duplicato con EXID data scatto trovato.")
+            messagebox.showinfo("Rinomina", "Nessun file con EXIF data scatto trovato.")
             return
         lines = [f"{f.name} -> {p.name}" for f, p in changes]
         preview = "\n".join(lines[:30])
         if len(lines) > 30:
             preview += f"\n... e altri {len(lines)-30}"
         ok = messagebox.askyesno("Rinomina duplicati",
-            f"Rinominare {len(changes)} file duplicati?\n\n{preview}")
+            f"Rinominare {len(changes)} file?\n\n{preview}")
         if not ok:
             return
         renamed = 0
@@ -445,16 +455,16 @@ class FotocompareApp:
             except Exception as e:
                 messagebox.showerror("Errore", f"Rinomina fallita: {f.name}\n{e}")
         self.set_status(f"Rinominati {renamed} duplicati")
-        messagebox.showinfo("Completato", f"Rinominati {renamed} file duplicati con data EXIF.")
+        messagebox.showinfo("Completato", f"Rinominati {renamed} file con data EXIF.")
 
     def rename_target_files(self):
         tgt = Path(self.tgt_var.get())
         if not tgt.is_dir():
             messagebox.showerror("Errore", "Directory target non valida")
             return
-        to_rename = [f for f in tgt.rglob('*') if f.is_file() and f.suffix.lower() in IMG_EXTS and is_generic_name(f.name)]
+        to_rename = [f for f in tgt.rglob('*') if f.is_file() and f.suffix.lower() in IMG_EXTS]
         if not to_rename:
-            messagebox.showinfo("Rinomina", "Nessun file con nome generico trovato in target")
+            messagebox.showinfo("Rinomina", "Nessun file immagine trovato in target")
             return
         renamed = 0
         skipped = 0
@@ -475,7 +485,8 @@ class FotocompareApp:
                 while new_path.exists():
                     new_path = f.parent / f"{parsed.strftime('%Y-%m-%d_%H%M%S')}_{c}{f.suffix.lower()}"
                     c += 1
-            changes.append((f, new_path))
+            if new_path != f:
+                changes.append((f, new_path))
         if not changes:
             messagebox.showinfo("Rinomina", f"Nessun file rinominabile. {skipped} senza EXIF data scatto.")
             return
