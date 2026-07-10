@@ -11,6 +11,12 @@ try:
 except ImportError:
     HAS_PILLOW = False
 
+try:
+    import piexif
+    HAS_PIEXIF = True
+except ImportError:
+    HAS_PIEXIF = False
+
 CONFIG_FILE = Path.home() / ".fotocompare_config.json"
 APP_DIR = Path(getattr(sys, '_MEIPASS', Path(__file__).parent))
 IMG_EXTS = {'.jpg','.jpeg','.png','.webp','.bmp','.tiff','.tif','.gif','.heic','.heif'}
@@ -38,6 +44,15 @@ def get_exif_date(path):
         return None
     try:
         img = Image.open(path)
+        if HAS_PIEXIF:
+            exif_raw = img.info.get('exif', b'')
+            if exif_raw:
+                exif_dict = piexif.load(exif_raw)
+                exif_data = exif_dict.get('Exif', {})
+                for tag_id in (piexif.ExifIFD.DateTimeOriginal, piexif.ExifIFD.DateTimeDigitized):
+                    val = exif_data.get(tag_id)
+                    if val:
+                        return val.decode() if isinstance(val, bytes) else str(val)
         exif = img.getexif()
         tags = dict(exif.items())
         if hasattr(exif, 'get_ifd'):
@@ -132,8 +147,10 @@ class FotocompareApp:
         btnf = ttk.Frame(main)
         btnf.grid(row=row, column=0, columnspan=3, pady=8, sticky=tk.W)
         ttk.Button(btnf, text="Scan", command=self.scan).pack(side=tk.LEFT, padx=2)
-        self.rename_btn = ttk.Button(btnf, text="Rinomina source", command=self.rename_source_files, state=tk.DISABLED)
-        self.rename_btn.pack(side=tk.LEFT, padx=2)
+        self.rename_dups_btn = ttk.Button(btnf, text="Rinomina duplicati", command=self.rename_duplicate_files, state=tk.DISABLED)
+        self.rename_dups_btn.pack(side=tk.LEFT, padx=2)
+        self.rename_target_btn = ttk.Button(btnf, text="Rinomina target", command=self.rename_target_files, state=tk.DISABLED)
+        self.rename_target_btn.pack(side=tk.LEFT, padx=2)
         ttk.Button(btnf, text="Info", command=self.show_info).pack(side=tk.LEFT, padx=2)
 
         # Progress
@@ -210,7 +227,8 @@ class FotocompareApp:
             self.tree.delete(item)
         self.duplicates = []
         self.src_hashes = {}
-        self.rename_btn.config(state=tk.DISABLED)
+        self.rename_dups_btn.config(state=tk.DISABLED)
+        self.rename_target_btn.config(state=tk.DISABLED)
 
         self.prog.grid()
         self.prog.start()
@@ -264,7 +282,8 @@ class FotocompareApp:
         ))
 
         self.duplicates = dups
-        self.rename_btn.config(state=tk.NORMAL if any(is_generic_name(f.name) for _, f, _, _ in dups) else tk.NORMAL)
+        self.rename_dups_btn.config(state=tk.NORMAL)
+        self.rename_target_btn.config(state=tk.NORMAL)
         self.set_status(f"Trovati {len(dups)} duplicati")
         self.ask_destination()
 
@@ -385,6 +404,96 @@ class FotocompareApp:
                 messagebox.showerror("Errore", f"Rinomina fallita: {f.name}\n{e}")
 
         self.set_status(f"Rinominati {renamed} file, saltati {skipped}")
+        messagebox.showinfo("Completato", f"Rinominati: {renamed}\nSaltati (no EXIF): {skipped}")
+
+    def rename_duplicate_files(self):
+        if not self.duplicates:
+            messagebox.showinfo("Rinomina", "Nessun duplicato da rinominare. Fai Scan prima.")
+            return
+        changes = []
+        for src_match, dup_file, sz, h in self.duplicates:
+            dt = get_exif_date(dup_file)
+            if not dt:
+                continue
+            parsed = parse_date_str(dt)
+            if not parsed:
+                continue
+            new_name = parsed.strftime("%Y-%m-%d_%H%M%S") + dup_file.suffix.lower()
+            new_path = dup_file.parent / new_name
+            if new_path.exists():
+                c = 1
+                while new_path.exists():
+                    new_path = dup_file.parent / f"{parsed.strftime('%Y-%m-%d_%H%M%S')}_{c}{dup_file.suffix.lower()}"
+                    c += 1
+            changes.append((dup_file, new_path))
+        if not changes:
+            messagebox.showinfo("Rinomina", "Nessun duplicato con EXID data scatto trovato.")
+            return
+        lines = [f"{f.name} -> {p.name}" for f, p in changes]
+        preview = "\n".join(lines[:30])
+        if len(lines) > 30:
+            preview += f"\n... e altri {len(lines)-30}"
+        ok = messagebox.askyesno("Rinomina duplicati",
+            f"Rinominare {len(changes)} file duplicati?\n\n{preview}")
+        if not ok:
+            return
+        renamed = 0
+        for f, new_path in changes:
+            try:
+                f.rename(new_path)
+                renamed += 1
+            except Exception as e:
+                messagebox.showerror("Errore", f"Rinomina fallita: {f.name}\n{e}")
+        self.set_status(f"Rinominati {renamed} duplicati")
+        messagebox.showinfo("Completato", f"Rinominati {renamed} file duplicati con data EXIF.")
+
+    def rename_target_files(self):
+        tgt = Path(self.tgt_var.get())
+        if not tgt.is_dir():
+            messagebox.showerror("Errore", "Directory target non valida")
+            return
+        to_rename = [f for f in tgt.rglob('*') if f.is_file() and f.suffix.lower() in IMG_EXTS and is_generic_name(f.name)]
+        if not to_rename:
+            messagebox.showinfo("Rinomina", "Nessun file con nome generico trovato in target")
+            return
+        renamed = 0
+        skipped = 0
+        changes = []
+        for f in to_rename:
+            dt = get_exif_date(f)
+            if not dt:
+                skipped += 1
+                continue
+            parsed = parse_date_str(dt)
+            if not parsed:
+                skipped += 1
+                continue
+            new_name = parsed.strftime("%Y-%m-%d_%H%M%S") + f.suffix.lower()
+            new_path = f.parent / new_name
+            if new_path.exists():
+                c = 1
+                while new_path.exists():
+                    new_path = f.parent / f"{parsed.strftime('%Y-%m-%d_%H%M%S')}_{c}{f.suffix.lower()}"
+                    c += 1
+            changes.append((f, new_path))
+        if not changes:
+            messagebox.showinfo("Rinomina", f"Nessun file rinominabile. {skipped} senza EXIF data scatto.")
+            return
+        lines = [f"{f.name} -> {p.name}" for f, p in changes]
+        preview = "\n".join(lines[:30])
+        if len(lines) > 30:
+            preview += f"\n... e altri {len(lines)-30}"
+        ok = messagebox.askyesno("Rinomina target",
+            f"Rinominare {len(changes)} file in target?\n{skipped} saltati (no EXIF).\n\n{preview}")
+        if not ok:
+            return
+        for f, new_path in changes:
+            try:
+                f.rename(new_path)
+                renamed += 1
+            except Exception as e:
+                messagebox.showerror("Errore", f"Rinomina fallita: {f.name}\n{e}")
+        self.set_status(f"Rinominati {renamed} file target, saltati {skipped}")
         messagebox.showinfo("Completato", f"Rinominati: {renamed}\nSaltati (no EXIF): {skipped}")
 
 
