@@ -39,13 +39,12 @@ def get_exif_date(path):
     try:
         img = Image.open(path)
         exif = img.getexif()
-        for tag_id, value in exif.items():
+        tags = dict(exif.items())
+        if hasattr(exif, 'get_ifd'):
+            tags.update(exif.get_ifd(0x8769))
+        for tag_id, value in tags.items():
             name = ExifTags.TAGS.get(tag_id, '')
-            if name == 'DateTimeOriginal':
-                return str(value)
-        for tag_id, value in exif.items():
-            name = ExifTags.TAGS.get(tag_id, '')
-            if name == 'DateTime':
+            if name in ('DateTimeOriginal', 'DateTime'):
                 return str(value)
     except Exception:
         pass
