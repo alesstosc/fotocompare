@@ -6,7 +6,7 @@ from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 try:
-    from PIL import Image, ExifTags
+    from PIL import Image, ExifTags, ImageTk
     HAS_PILLOW = True
 except ImportError:
     HAS_PILLOW = False
@@ -106,10 +106,10 @@ class FotocompareApp:
         self.root.title("FOTO COMPARE")
         try:
             icon_path = APP_DIR / 'pngaaa.com-4830752.png'
-            if icon_path.exists():
-                icon = tk.PhotoImage(file=str(icon_path))
+            if icon_path.exists() and HAS_PILLOW:
+                img = Image.open(icon_path)
+                icon = ImageTk.PhotoImage(img)
                 self.root.iconphoto(True, icon)
-            self.root.iconphoto(True, icon)
         except Exception:
             pass
         self.root.geometry("850x650")
