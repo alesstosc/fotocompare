@@ -29,13 +29,22 @@ jobs:
       - run: pyinstaller --onefile --name fotocompare --add-data "pngaaa.com-4830752.png:." fotocompare.py
         if: runner.os != 'Windows'
 
+      - name: Rename per OS
+        run: |
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            mv dist/fotocompare.exe "dist/fotocompare-windows.exe"
+          else
+            mv dist/fotocompare "dist/fotocompare-${{ runner.os }}"
+          fi
+        shell: bash
+
       - uses: actions/upload-artifact@v4
         with:
           name: fotocompare-${{ runner.os }}
-          path: dist/fotocompare*
+          path: dist/fotocompare-*
 
       - name: Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v1
         with:
-          files: dist/fotocompare*
+          files: dist/fotocompare-*
