@@ -1,8 +1,17 @@
-import os, sys, hashlib, shutil, json, re
+import os, sys, hashlib, shutil, json, re, tempfile
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from pathlib import Path
 from datetime import datetime
+
+LOG_FILE = Path(tempfile.gettempdir()) / "fotocompare.log"
+
+def flog(msg):
+    try:
+        with open(LOG_FILE, 'a', encoding='utf-8') as f:
+            f.write(msg + '\n')
+    except Exception:
+        pass
 
 
 try:
@@ -16,6 +25,14 @@ try:
     HAS_PIEXIF = True
 except ImportError:
     HAS_PIEXIF = False
+
+flog(f"START HAS_PILLOW={HAS_PILLOW} HAS_PIEXIF={HAS_PIEXIF} sys.platform={sys.platform}")
+if HAS_PILLOW:
+    try:
+        from PIL import features
+        flog(f"PIL JPEG_OK={features.check_feature('jpg')}")
+    except Exception:
+        pass
 
 CONFIG_FILE = Path.home() / ".fotocompare_config.json"
 APP_DIR = Path(getattr(sys, '_MEIPASS', Path(__file__).parent))
@@ -280,6 +297,8 @@ class FotocompareApp:
 
         self.set_status("Scansione target per duplicati...")
         tgt_files = list(walk_images(tgt))
+        flog(f"SCAN src={src} ({len(src_files)} file, pix_ok={pix_ok})")
+        flog(f"SCAN tgt={tgt} ({len(tgt_files)} file)")
         dups = []
         seen = set()  # evita duplicare stesso file (file hash + pixel hash)
         for f in tgt_files:
@@ -299,6 +318,8 @@ class FotocompareApp:
 
         self.prog.stop()
         self.prog.grid_remove()
+
+        flog(f"SCAN result: {len(dups)} duplicati trovati")
 
         if not dups:
             self.set_status("Nessun duplicato trovato")
