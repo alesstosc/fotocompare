@@ -265,6 +265,13 @@ class FotocompareApp:
                 sz = f.stat().st_size
                 if sz in self.src_hashes and h in self.src_hashes[sz]:
                     src_match = self.src_hashes[sz][h]
+                    try:
+                        full_src = hash_file(src_match, full=True)
+                        full_tgt = hash_file(f, full=True)
+                        if full_src != full_tgt:
+                            continue
+                    except Exception:
+                        continue
                     dups.append((src_match, f, sz, h))
 
         self.prog.stop()
