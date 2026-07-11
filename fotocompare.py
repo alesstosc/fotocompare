@@ -21,26 +21,6 @@ CONFIG_FILE = Path.home() / ".fotocompare_config.json"
 APP_DIR = Path(getattr(sys, '_MEIPASS', Path(__file__).parent))
 IMG_EXTS = {'.jpg','.jpeg','.png','.webp','.bmp','.tiff','.tif','.gif','.heic','.heif'}
 
-DEBUG_LOG = Path.home() / "fotocompare_debug.log"
-
-def dlog(msg):
-    try:
-        with open(DEBUG_LOG, 'a') as f:
-            f.write(msg + '\n')
-    except Exception:
-        pass
-
-if HAS_PILLOW:
-    try:
-        from PIL import features
-        JPEG_OK = features.check_feature('jpg')
-    except Exception:
-        JPEG_OK = 'UNKNOWN'
-else:
-    JPEG_OK = False
-
-dlog(f"START: HAS_PILLOW={HAS_PILLOW} HAS_PIEXIF={HAS_PIEXIF} JPEG_OK={JPEG_OK}")
-
 def load_config():
     if CONFIG_FILE.exists():
         return json.loads(CONFIG_FILE.read_text())
@@ -69,14 +49,12 @@ def hash_pixels(path):
         data = img_rgb.tobytes()
         expected = img_rgb.width * img_rgb.height * 3
         if len(data) != expected or expected == 0:
-            dlog(f"INVALID pix: {path} w={img_rgb.width} h={img_rgb.height} len={len(data)} exp={expected}")
             return None
         full_hash = hashlib.sha256(data).hexdigest()
         thumb = img_rgb.resize((32, 32), Image.LANCZOS).tobytes()
         thumb_hash = hashlib.sha256(thumb).hexdigest()
         return (full_hash, thumb_hash)
-    except Exception as e:
-        dlog(f"ERROR pix: {path}: {e}")
+    except Exception:
         return None
 
 def get_exif_date(path):
@@ -149,7 +127,6 @@ class FotocompareApp:
     def __init__(self, root):
         self.root = root
         self.root.title("FOTO COMPARE")
-        print(f"[DIAG] HAS_PILLOW={HAS_PILLOW} HAS_PIEXIF={HAS_PIEXIF} _MEIPASS={getattr(sys, '_MEIPASS', 'N/A')}", file=sys.stderr)
         try:
             icon_path = APP_DIR / 'pngaaa.com-4830752.png'
             if icon_path.exists() and HAS_PILLOW:
@@ -165,6 +142,7 @@ class FotocompareApp:
         self.moved_files = []
         self.dest_dir = None
         self.src_hashes = {}
+        self.src_pix = {}
         self.setup_ui()
 
     def setup_ui(self):
@@ -216,7 +194,7 @@ class FotocompareApp:
         self.tree.heading('file', text='File duplicato (target)')
         self.tree.heading('src_match', text='Match in source')
         self.tree.heading('size', text='Dimensione')
-        self.tree.heading('hash', text='Hash pixel')
+        self.tree.heading('hash', text='Hash file')
         self.tree.column('file', width=350)
         self.tree.column('src_match', width=300)
         self.tree.column('size', width=90)
@@ -285,46 +263,42 @@ class FotocompareApp:
         self.prog.start()
         self.set_status("Indicizzazione source...")
 
-        # Build source map: full_hash -> (thumb_hash, [paths])
+        # Corretto: file hash primario (no falsi positivi) + pixel hash bonus
         src_files = list(walk_images(src))
-        self.src_hashes = {}
+        self.src_hashes = {}     # file_hash -> [paths]
+        self.src_pix = {}        # pix_hash -> [paths] (bonus, solo se PIL OK)
+        pix_ok = 0
         for f in src_files:
-            pix = hash_pixels(f)
-            if pix:
-                fh, th = pix
-                bucket = self.src_hashes.setdefault(fh, [None, []])
-                bucket[0] = th
-                bucket[1].append(f)
-            else:
-                dlog(f"Source SKIP: {f.name}")
+            fh = hash_file(f, full=True)
+            self.src_hashes.setdefault(fh, []).append(f)
+            ph = hash_pixels(f)
+            if ph:
+                self.src_pix.setdefault(ph[0], []).append(f)
+                pix_ok += 1
 
-        idx_count = sum(len(b[1]) for b in self.src_hashes.values())
-        dlog(f"Source indexed: {idx_count}/{len(src_files)} (unique full hashes: {len(self.src_hashes)})")
+        self.set_status(f"Indicizzati {len(src_files)} file ({pix_ok} con hash pixel)")
 
-        # Scan target: pixel hash match + thumb cross-check
         self.set_status("Scansione target per duplicati...")
         tgt_files = list(walk_images(tgt))
         dups = []
-        skip_cnt = 0
+        seen = set()  # evita duplicare stesso file (file hash + pixel hash)
         for f in tgt_files:
-            pix_tgt = hash_pixels(f)
-            if not pix_tgt:
-                skip_cnt += 1
-                continue
-            fh_tgt, th_tgt = pix_tgt
-            if fh_tgt in self.src_hashes and self.src_hashes[fh_tgt][0] == th_tgt:
-                src_match = self.src_hashes[fh_tgt][1][0]
+            fh_tgt = hash_file(f, full=True)
+            # Fase 1: match esatto per hash file (sempre affidabile)
+            if fh_tgt in self.src_hashes:
+                src_match = self.src_hashes[fh_tgt][0]
                 dups.append((src_match, f, f.stat().st_size, fh_tgt))
-            else:
-                passed_full = fh_tgt in self.src_hashes
-                dlog(f"NO MATCH: {f.name} full_in_src={passed_full}")
-        if skip_cnt:
-            dlog(f"Target SKIP (hash fallito): {skip_cnt} file")
+                seen.add(str(f))
+                continue
+            # Fase 2: bonus pixel hash (solo se PIL funziona)
+            ph = hash_pixels(f)
+            if ph and ph[0] in self.src_pix:
+                src_match = self.src_pix[ph[0]][0]
+                dups.append((src_match, f, f.stat().st_size, ph[0]))
+                seen.add(str(f))
 
         self.prog.stop()
         self.prog.grid_remove()
-
-        print(f"[DIAG] Target scanditi: {len(tgt_files)} file, {len(dups)} duplicati", file=sys.stderr)
 
         if not dups:
             self.set_status("Nessun duplicato trovato")
