@@ -3,7 +3,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from pathlib import Path
 from datetime import datetime
-from concurrent.futures import ThreadPoolExecutor, as_completed
+
 
 try:
     from PIL import Image, ExifTags, ImageTk
@@ -259,37 +259,30 @@ class FotocompareApp:
         # Build source map: pix_hash -> [paths]
         src_files = list(walk_images(src))
         self.src_hashes = {}
-        with ThreadPoolExecutor(max_workers=8) as pool:
-            fut_map = {pool.submit(hash_pixels, f): f for f in src_files}
-            for fut in as_completed(fut_map):
-                f = fut_map[fut]
-                try:
-                    pix = fut.result()
-                except Exception:
-                    continue
-                if pix:
-                    self.src_hashes.setdefault(pix, []).append(f)
-
+        for f in src_files:
+            pix = hash_pixels(f)
+            if pix:
+                self.src_hashes.setdefault(pix, []).append(f)
+            else:
+                print(f"[DIAG] Source SKIP (hash fallito): {f.name}", file=sys.stderr)
         print(f"[DIAG] Source indicizzati: {len(self.src_hashes)} hash unici da {len(src_files)} file", file=sys.stderr)
 
         # Scan target: pixel hash match
         self.set_status("Scansione target per duplicati...")
         tgt_files = list(walk_images(tgt))
         dups = []
-        with ThreadPoolExecutor(max_workers=8) as pool:
-            fut_map = {pool.submit(hash_pixels, f): f for f in tgt_files}
-            for fut in as_completed(fut_map):
-                f = fut_map[fut]
-                try:
-                    pix_tgt = fut.result()
-                except Exception:
-                    continue
-                if not pix_tgt:
-                    continue
-                if pix_tgt in self.src_hashes:
-                    src_match = self.src_hashes[pix_tgt][0]
-                    sz = f.stat().st_size
-                    dups.append((src_match, f, sz, pix_tgt))
+        skip_cnt = 0
+        for f in tgt_files:
+            pix_tgt = hash_pixels(f)
+            if not pix_tgt:
+                skip_cnt += 1
+                continue
+            if pix_tgt in self.src_hashes:
+                src_match = self.src_hashes[pix_tgt][0]
+                sz = f.stat().st_size
+                dups.append((src_match, f, sz, pix_tgt))
+        if skip_cnt:
+            print(f"[DIAG] Target SKIP (hash fallito): {skip_cnt} file", file=sys.stderr)
 
         self.prog.stop()
         self.prog.grid_remove()
