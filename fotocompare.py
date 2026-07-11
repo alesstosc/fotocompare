@@ -39,6 +39,15 @@ def hash_file(path, full=False):
     with open(path, 'rb') as f:
         return hashlib.sha256(f.read(65536)).hexdigest()
 
+def hash_pixels(path):
+    if not HAS_PILLOW:
+        return None
+    try:
+        img = Image.open(path).convert('RGB')
+        return hashlib.sha256(img.tobytes()).hexdigest()
+    except Exception:
+        return None
+
 def get_exif_date(path):
     if not HAS_PILLOW:
         return None
@@ -175,7 +184,7 @@ class FotocompareApp:
         self.tree.heading('file', text='File duplicato (target)')
         self.tree.heading('src_match', text='Match in source')
         self.tree.heading('size', text='Dimensione')
-        self.tree.heading('hash', text='Hash (64KB)')
+        self.tree.heading('hash', text='Hash pixel')
         self.tree.column('file', width=350)
         self.tree.column('src_match', width=300)
         self.tree.column('size', width=90)
@@ -244,43 +253,38 @@ class FotocompareApp:
         self.prog.start()
         self.set_status("Indicizzazione source...")
 
-        # Build source hash map: (size, hash64k) -> path
+        # Build source map: pix_hash -> [paths]
         src_files = list(walk_images(src))
         self.src_hashes = {}
         with ThreadPoolExecutor(max_workers=8) as pool:
-            fut_map = {pool.submit(hash_file, f, False): f for f in src_files}
+            fut_map = {pool.submit(hash_pixels, f): f for f in src_files}
             for fut in as_completed(fut_map):
                 f = fut_map[fut]
                 try:
-                    h = fut.result()
+                    pix = fut.result()
                 except Exception:
                     continue
-                sz = f.stat().st_size
-                self.src_hashes.setdefault(sz, {})[h] = f
+                if pix:
+                    self.src_hashes.setdefault(pix, []).append(f)
 
-        # Scan target
+        # Scan target: pixel hash match
         self.set_status("Scansione target per duplicati...")
         tgt_files = list(walk_images(tgt))
         dups = []
         with ThreadPoolExecutor(max_workers=8) as pool:
-            fut_map = {pool.submit(hash_file, f, False): f for f in tgt_files}
+            fut_map = {pool.submit(hash_pixels, f): f for f in tgt_files}
             for fut in as_completed(fut_map):
                 f = fut_map[fut]
                 try:
-                    h = fut.result()
+                    pix_tgt = fut.result()
                 except Exception:
                     continue
-                sz = f.stat().st_size
-                if sz in self.src_hashes and h in self.src_hashes[sz]:
-                    src_match = self.src_hashes[sz][h]
-                    try:
-                        full_src = hash_file(src_match, full=True)
-                        full_tgt = hash_file(f, full=True)
-                        if full_src != full_tgt:
-                            continue
-                    except Exception:
-                        continue
-                    dups.append((src_match, f, sz, h))
+                if not pix_tgt:
+                    continue
+                if pix_tgt in self.src_hashes:
+                    src_match = self.src_hashes[pix_tgt][0]
+                    sz = f.stat().st_size
+                    dups.append((src_match, f, sz, pix_tgt))
 
         self.prog.stop()
         self.prog.grid_remove()
