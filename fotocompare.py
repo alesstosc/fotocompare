@@ -21,6 +21,8 @@ CONFIG_FILE = Path.home() / ".fotocompare_config.json"
 APP_DIR = Path(getattr(sys, '_MEIPASS', Path(__file__).parent))
 IMG_EXTS = {'.jpg','.jpeg','.png','.webp','.bmp','.tiff','.tif','.gif','.heic','.heif'}
 
+print(f"[DIAG] HAS_PILLOW={HAS_PILLOW} HAS_PIEXIF={HAS_PIEXIF}", file=sys.stderr)
+
 def load_config():
     if CONFIG_FILE.exists():
         return json.loads(CONFIG_FILE.read_text())
@@ -267,6 +269,8 @@ class FotocompareApp:
                 if pix:
                     self.src_hashes.setdefault(pix, []).append(f)
 
+        print(f"[DIAG] Source indicizzati: {len(self.src_hashes)} hash unici da {len(src_files)} file", file=sys.stderr)
+
         # Scan target: pixel hash match
         self.set_status("Scansione target per duplicati...")
         tgt_files = list(walk_images(tgt))
@@ -288,6 +292,8 @@ class FotocompareApp:
 
         self.prog.stop()
         self.prog.grid_remove()
+
+        print(f"[DIAG] Target scanditi: {len(tgt_files)} file, {len(dups)} duplicati", file=sys.stderr)
 
         if not dups:
             self.set_status("Nessun duplicato trovato")
