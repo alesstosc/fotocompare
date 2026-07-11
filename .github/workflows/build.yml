@@ -22,11 +22,11 @@ jobs:
         with:
           python-version: '3.11'
 
-      - run: pip install pyinstaller pillow
+      - run: pip install pyinstaller pillow piexif
 
-      - run: pyinstaller --onefile --name fotocompare --add-data "pngaaa.com-4830752.png;." fotocompare.py
+      - run: pyinstaller --onefile --name fotocompare --hidden-import piexif --add-data "pngaaa.com-4830752.png;." fotocompare.py
         if: runner.os == 'Windows'
-      - run: pyinstaller --onefile --name fotocompare --add-data "pngaaa.com-4830752.png:." fotocompare.py
+      - run: pyinstaller --onefile --name fotocompare --hidden-import piexif --add-data "pngaaa.com-4830752.png:." fotocompare.py
         if: runner.os != 'Windows'
 
       - name: Rename per OS

@@ -58,6 +58,11 @@ def get_exif_date(path):
         if hasattr(exif, 'get_ifd'):
             tags.update(exif.get_ifd(0x8769))
         for tag_id, value in tags.items():
+            if isinstance(value, bytes):
+                try:
+                    value = value.decode('utf-8', errors='replace').strip('\x00')
+                except Exception:
+                    continue
             name = ExifTags.TAGS.get(tag_id, '')
             if name in ('DateTimeOriginal', 'DateTime'):
                 return str(value)
@@ -153,6 +158,8 @@ class FotocompareApp:
         self.rename_dups_btn.pack(side=tk.LEFT, padx=2)
         self.rename_target_btn = ttk.Button(btnf, text="Rinomina target", command=self.rename_target_files, state=tk.DISABLED)
         self.rename_target_btn.pack(side=tk.LEFT, padx=2)
+        self.rename_source_btn = ttk.Button(btnf, text="Rinomina source", command=self.rename_source_files, state=tk.DISABLED)
+        self.rename_source_btn.pack(side=tk.LEFT, padx=2)
         ttk.Button(btnf, text="Info", command=self.show_info).pack(side=tk.LEFT, padx=2)
 
         # Progress
@@ -231,6 +238,7 @@ class FotocompareApp:
         self.src_hashes = {}
         self.rename_dups_btn.config(state=tk.DISABLED)
         self.rename_target_btn.config(state=tk.DISABLED)
+        self.rename_source_btn.config(state=tk.DISABLED)
 
         self.prog.grid()
         self.prog.start()
@@ -294,6 +302,7 @@ class FotocompareApp:
         self.moved_files = []
         self.rename_dups_btn.config(state=tk.NORMAL)
         self.rename_target_btn.config(state=tk.NORMAL)
+        self.rename_source_btn.config(state=tk.NORMAL)
         self.set_status(f"Trovati {len(dups)} duplicati")
         self.ask_destination()
 
