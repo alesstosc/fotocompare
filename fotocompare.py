@@ -46,8 +46,16 @@ def hash_pixels(path):
         return None
     try:
         img = Image.open(path).convert('RGB')
-        return hashlib.sha256(img.tobytes()).hexdigest()
-    except Exception:
+        data = img.tobytes()
+        expected = img.width * img.height * 3
+        if len(data) != expected or expected == 0:
+            print(f"[DIAG] hash_pixels INVALID: {path} w={img.width} h={img.height} "
+                  f"data_len={len(data)} expected={expected}", file=sys.stderr)
+            return None
+        h = hashlib.sha256(data).hexdigest()
+        return h
+    except Exception as e:
+        print(f"[DIAG] hash_pixels ERROR: {path}: {e}", file=sys.stderr)
         return None
 
 def get_exif_date(path):
@@ -279,8 +287,14 @@ class FotocompareApp:
                 continue
             if pix_tgt in self.src_hashes:
                 src_match = self.src_hashes[pix_tgt][0]
-                sz = f.stat().st_size
-                dups.append((src_match, f, sz, pix_tgt))
+                # Re-verifica: ricalcola hash pixel di entrambi
+                verify_src = hash_pixels(src_match)
+                verify_tgt = hash_pixels(f)
+                if verify_src and verify_tgt and verify_src == verify_tgt:
+                    sz = f.stat().st_size
+                    dups.append((src_match, f, sz, verify_tgt))
+                else:
+                    print(f"[DIAG] FALSO POSITIVO evitato: {src_match.name} vs {f.name}", file=sys.stderr)
         if skip_cnt:
             print(f"[DIAG] Target SKIP (hash fallito): {skip_cnt} file", file=sys.stderr)
 
