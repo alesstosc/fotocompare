@@ -120,6 +120,7 @@ class FotocompareApp:
     def __init__(self, root):
         self.root = root
         self.root.title("FOTO COMPARE")
+        print(f"[DIAG] HAS_PILLOW={HAS_PILLOW} HAS_PIEXIF={HAS_PIEXIF} _MEIPASS={getattr(sys, '_MEIPASS', 'N/A')}", file=sys.stderr)
         try:
             icon_path = APP_DIR / 'pngaaa.com-4830752.png'
             if icon_path.exists() and HAS_PILLOW:
