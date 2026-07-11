@@ -21,7 +21,25 @@ CONFIG_FILE = Path.home() / ".fotocompare_config.json"
 APP_DIR = Path(getattr(sys, '_MEIPASS', Path(__file__).parent))
 IMG_EXTS = {'.jpg','.jpeg','.png','.webp','.bmp','.tiff','.tif','.gif','.heic','.heif'}
 
-print(f"[DIAG] HAS_PILLOW={HAS_PILLOW} HAS_PIEXIF={HAS_PIEXIF}", file=sys.stderr)
+DEBUG_LOG = Path.home() / "fotocompare_debug.log"
+
+def dlog(msg):
+    try:
+        with open(DEBUG_LOG, 'a') as f:
+            f.write(msg + '\n')
+    except Exception:
+        pass
+
+if HAS_PILLOW:
+    try:
+        from PIL import features
+        JPEG_OK = features.check_feature('jpg')
+    except Exception:
+        JPEG_OK = 'UNKNOWN'
+else:
+    JPEG_OK = False
+
+dlog(f"START: HAS_PILLOW={HAS_PILLOW} HAS_PIEXIF={HAS_PIEXIF} JPEG_OK={JPEG_OK}")
 
 def load_config():
     if CONFIG_FILE.exists():
@@ -42,20 +60,23 @@ def hash_file(path, full=False):
         return hashlib.sha256(f.read(65536)).hexdigest()
 
 def hash_pixels(path):
+    """Returns (full_hash, thumb_hash) or None on failure"""
     if not HAS_PILLOW:
         return None
     try:
-        img = Image.open(path).convert('RGB')
-        data = img.tobytes()
-        expected = img.width * img.height * 3
+        img = Image.open(path)
+        img_rgb = img.convert('RGB')
+        data = img_rgb.tobytes()
+        expected = img_rgb.width * img_rgb.height * 3
         if len(data) != expected or expected == 0:
-            print(f"[DIAG] hash_pixels INVALID: {path} w={img.width} h={img.height} "
-                  f"data_len={len(data)} expected={expected}", file=sys.stderr)
+            dlog(f"INVALID pix: {path} w={img_rgb.width} h={img_rgb.height} len={len(data)} exp={expected}")
             return None
-        h = hashlib.sha256(data).hexdigest()
-        return h
+        full_hash = hashlib.sha256(data).hexdigest()
+        thumb = img_rgb.resize((32, 32), Image.LANCZOS).tobytes()
+        thumb_hash = hashlib.sha256(thumb).hexdigest()
+        return (full_hash, thumb_hash)
     except Exception as e:
-        print(f"[DIAG] hash_pixels ERROR: {path}: {e}", file=sys.stderr)
+        dlog(f"ERROR pix: {path}: {e}")
         return None
 
 def get_exif_date(path):
@@ -264,18 +285,23 @@ class FotocompareApp:
         self.prog.start()
         self.set_status("Indicizzazione source...")
 
-        # Build source map: pix_hash -> [paths]
+        # Build source map: full_hash -> (thumb_hash, [paths])
         src_files = list(walk_images(src))
         self.src_hashes = {}
         for f in src_files:
             pix = hash_pixels(f)
             if pix:
-                self.src_hashes.setdefault(pix, []).append(f)
+                fh, th = pix
+                bucket = self.src_hashes.setdefault(fh, [None, []])
+                bucket[0] = th
+                bucket[1].append(f)
             else:
-                print(f"[DIAG] Source SKIP (hash fallito): {f.name}", file=sys.stderr)
-        print(f"[DIAG] Source indicizzati: {len(self.src_hashes)} hash unici da {len(src_files)} file", file=sys.stderr)
+                dlog(f"Source SKIP: {f.name}")
 
-        # Scan target: pixel hash match
+        idx_count = sum(len(b[1]) for b in self.src_hashes.values())
+        dlog(f"Source indexed: {idx_count}/{len(src_files)} (unique full hashes: {len(self.src_hashes)})")
+
+        # Scan target: pixel hash match + thumb cross-check
         self.set_status("Scansione target per duplicati...")
         tgt_files = list(walk_images(tgt))
         dups = []
@@ -285,18 +311,15 @@ class FotocompareApp:
             if not pix_tgt:
                 skip_cnt += 1
                 continue
-            if pix_tgt in self.src_hashes:
-                src_match = self.src_hashes[pix_tgt][0]
-                # Re-verifica: ricalcola hash pixel di entrambi
-                verify_src = hash_pixels(src_match)
-                verify_tgt = hash_pixels(f)
-                if verify_src and verify_tgt and verify_src == verify_tgt:
-                    sz = f.stat().st_size
-                    dups.append((src_match, f, sz, verify_tgt))
-                else:
-                    print(f"[DIAG] FALSO POSITIVO evitato: {src_match.name} vs {f.name}", file=sys.stderr)
+            fh_tgt, th_tgt = pix_tgt
+            if fh_tgt in self.src_hashes and self.src_hashes[fh_tgt][0] == th_tgt:
+                src_match = self.src_hashes[fh_tgt][1][0]
+                dups.append((src_match, f, f.stat().st_size, fh_tgt))
+            else:
+                passed_full = fh_tgt in self.src_hashes
+                dlog(f"NO MATCH: {f.name} full_in_src={passed_full}")
         if skip_cnt:
-            print(f"[DIAG] Target SKIP (hash fallito): {skip_cnt} file", file=sys.stderr)
+            dlog(f"Target SKIP (hash fallito): {skip_cnt} file")
 
         self.prog.stop()
         self.prog.grid_remove()
